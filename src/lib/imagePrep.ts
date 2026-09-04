@@ -437,8 +437,8 @@ function largestBlobQuad(
   return { quad, areaFrac, solidity };
 }
 
-/** 카드 네 모서리 자동 추정. 못 찾으면 null. */
-export async function detectCardQuad(file: Blob): Promise<QuadNorm | null> {
+/** 카드 네 모서리 추정 (밝기 기반, 폴백용). 못 찾으면 null. */
+export async function detectQuadByBlob(file: Blob): Promise<QuadNorm | null> {
   const bmp = await toBitmap(file);
   try {
     const s = 480 / Math.max(bmp.width, bmp.height);

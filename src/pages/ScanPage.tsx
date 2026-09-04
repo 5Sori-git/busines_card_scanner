@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Camera, Images, Keyboard, RotateCcw, Cpu, Cloud, ChevronRight } from 'lucide-react';
 import AppHeader from '../components/AppHeader';
@@ -7,6 +7,7 @@ import { ImagePrepError, type QuadNorm } from '../lib/imagePrep';
 import { OcrError, getOcrModel, type OcrProgress } from '../lib/ocr';
 import { CloudOcrError, getEngine } from '../lib/cloudOcr';
 import { recognizeImage } from '../lib/recognize';
+import { preloadCardDetect } from '../lib/cardDetect';
 import { parseCard } from '../lib/parseCard';
 import { saveImage } from '../db';
 import { newId } from '../lib/id';
@@ -25,6 +26,11 @@ export default function ScanPage() {
 
   const engine = getEngine();
   const model = getOcrModel();
+
+  // 크롭 화면 테두리 검출용 워커 미리 준비
+  useEffect(() => {
+    preloadCardDetect();
+  }, []);
 
   function handlePick(file: File | undefined) {
     if (!file) return;
