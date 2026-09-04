@@ -13,7 +13,6 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = join(__dirname, '..');
 const outDir = join(root, 'public', 'tesseract');
 const coreDir = join(outDir, 'core');
-const langDir = join(outDir, 'lang');
 
 const CORE_FILES = [
   'tesseract-core.wasm',
@@ -26,9 +25,12 @@ const CORE_FILES = [
   'tesseract-core-simd-lstm.wasm.js',
 ];
 
-// fast 모델: kor ≈ 6.3MB, eng ≈ 2MB (best 모델은 각 3배)
-const LANG_BASE = 'https://tessdata.projectnaptha.com/4.0.0_fast';
+// fast: 용량 작고 빠름(기본). best: 한글 정확도↑, 용량 큼(설정에서 선택).
 const LANGS = ['eng', 'kor'];
+const MODELS = [
+  { dir: 'lang', base: 'https://tessdata.projectnaptha.com/4.0.0_fast' },
+  { dir: 'lang-best', base: 'https://tessdata.projectnaptha.com/4.0.0' },
+];
 
 const exists = (p) =>
   access(p, constants.F_OK).then(
@@ -46,13 +48,13 @@ async function nonEmpty(p) {
 
 async function main() {
   await mkdir(coreDir, { recursive: true });
-  await mkdir(langDir, { recursive: true });
+  for (const m of MODELS) await mkdir(join(outDir, m.dir), { recursive: true });
 
   // 이미 완비되었으면 바로 종료
   const targets = [
     join(outDir, 'worker.min.js'),
     ...CORE_FILES.map((f) => join(coreDir, f)),
-    ...LANGS.map((l) => join(langDir, `${l}.traineddata.gz`)),
+    ...MODELS.flatMap((m) => LANGS.map((l) => join(outDir, m.dir, `${l}.traineddata.gz`))),
   ];
   if ((await Promise.all(targets.map(nonEmpty))).every(Boolean)) {
     console.log('[setup-ocr] 자산이 이미 준비되어 있습니다. 건너뜁니다.');
@@ -76,22 +78,25 @@ async function main() {
   }
   console.log('[setup-ocr] core wasm 복사 완료');
 
-  // 3) 언어 데이터 (네트워크). 실패해도 빌드는 계속 — 온라인에서 재시도 시 CDN 폴백.
-  for (const lang of LANGS) {
-    const dest = join(langDir, `${lang}.traineddata.gz`);
-    if (await nonEmpty(dest)) continue;
-    const url = `${LANG_BASE}/${lang}.traineddata.gz`;
-    try {
-      console.log(`[setup-ocr] 다운로드: ${url}`);
-      const res = await fetch(url);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      await writeFile(dest, Buffer.from(await res.arrayBuffer()));
-      console.log(`[setup-ocr]   → ${lang}.traineddata.gz 저장`);
-    } catch (e) {
-      console.warn(
-        `[setup-ocr] ⚠ ${lang} 언어 데이터 다운로드 실패 (${e.message}). ` +
-          `온라인 상태에서 "npm run setup:ocr" 로 다시 시도하세요.`,
-      );
+  // 3) 언어 데이터 (네트워크). 실패해도 빌드는 계속.
+  for (const m of MODELS) {
+    for (const lang of LANGS) {
+      const dest = join(outDir, m.dir, `${lang}.traineddata.gz`);
+      if (await nonEmpty(dest)) continue;
+      const url = `${m.base}/${lang}.traineddata.gz`;
+      try {
+        console.log(`[setup-ocr] 다운로드: ${url}`);
+        const res = await fetch(url);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const buf = Buffer.from(await res.arrayBuffer());
+        await writeFile(dest, buf);
+        console.log(`[setup-ocr]   → ${m.dir}/${lang}.traineddata.gz (${(buf.length / 1e6).toFixed(1)}MB)`);
+      } catch (e) {
+        console.warn(
+          `[setup-ocr] ⚠ ${m.dir}/${lang} 다운로드 실패 (${e.message}). ` +
+            `온라인에서 "npm run setup:ocr" 로 재시도하세요.`,
+        );
+      }
     }
   }
   console.log('[setup-ocr] 완료');

@@ -1,12 +1,17 @@
 // 명함 이미지 전처리.
-//  - 회전(사용자 지정 0/90/180/270) + 크롭(명함 영역만) → OCR 정확도의 핵심
+//  - 회전(0/90/180/270) + 크롭/원근보정(명함 영역만 반듯하게) → OCR 정확도의 핵심
 //  - 업스케일(작은 글씨 보정)
 //  - 그레이스케일 + 조명 보정
-//      mode 'plain'    : 그레이스케일만 (Tesseract 내부 Otsu 사용) — 균일 조명 깨끗한 크롭에 적합
+//      mode 'plain'    : 그레이스케일만 (Tesseract 내부 Otsu 사용)
 //      mode 'binarize' : 로컬 적응형 이진화 — 조명 불균일 / 질감 있는 명함에 강함
 //      mode 'auto'     : binarize 시도 후 결과가 이상하면(거의 단색) plain+대비스트레치로 폴백
 
 export type PrepMode = 'auto' | 'binarize' | 'plain';
+
+export interface Pt {
+  x: number;
+  y: number;
+}
 
 /** (회전 적용 후) 이미지 기준 0~1 정규화 크롭 사각형 */
 export interface CropNorm {
@@ -16,8 +21,12 @@ export interface CropNorm {
   h: number;
 }
 
+/** (회전 적용 후) 이미지 기준 0~1 정규화 네 꼭짓점 — TL, TR, BR, BL 순서 */
+export type QuadNorm = [Pt, Pt, Pt, Pt];
+
 export interface PrepOptions {
   cropNorm?: CropNorm;
+  quadNorm?: QuadNorm;
   rotate?: 0 | 90 | 180 | 270;
   mode?: PrepMode;
 }
@@ -25,7 +34,7 @@ export interface PrepOptions {
 export interface PreparedImage {
   /** OCR 입력용 (그레이스케일/이진화, PNG) */
   ocrBlob: Blob;
-  /** 저장/표시용 (컬러, 크롭·회전 반영, JPEG) */
+  /** 저장/표시용 (컬러, 크롭·회전·원근보정 반영, JPEG) */
   displayBlob: Blob;
   width: number;
   height: number;
@@ -34,6 +43,7 @@ export interface PreparedImage {
 const OCR_TARGET_LONG_EDGE = 2200;
 const MAX_UPSCALE = 3;
 const DISPLAY_LONG_EDGE = 1280;
+const SOURCE_MAX_LONG_EDGE = 2800;
 
 export class ImagePrepError extends Error {
   cause?: unknown;
@@ -48,7 +58,7 @@ async function toBitmap(file: Blob): Promise<ImageBitmap> {
   try {
     return await createImageBitmap(file, { imageOrientation: 'from-image' });
   } catch {
-    // imageOrientation 옵션 미지원 브라우저 폴백
+    /* imageOrientation 미지원 → 폴백 */
   }
   try {
     return await createImageBitmap(file);
@@ -107,7 +117,105 @@ function drawRotated(src: Src, rotate: 0 | 90 | 180 | 270): HTMLCanvasElement {
   return canvas;
 }
 
-/** 로컬 적응형 이진화 (적분영상). data 는 RGBA, 그레이스케일이 R=G=B 로 채워져 있다고 가정 */
+function downscale(src: HTMLCanvasElement, maxLong: number): HTMLCanvasElement {
+  const long = Math.max(src.width, src.height);
+  if (long <= maxLong) return src;
+  const s = maxLong / long;
+  const { canvas, ctx } = makeCanvas(src.width * s, src.height * s);
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(src, 0, 0, canvas.width, canvas.height);
+  return canvas;
+}
+
+const dist = (p: Pt, q: Pt) => Math.hypot(p.x - q.x, p.y - q.y);
+
+/** 단위정사각형 (0,0)(1,0)(1,1)(0,1) → quad(p0..p3) 사영변환 계수 */
+function squareToQuad(p: [Pt, Pt, Pt, Pt]) {
+  const [p0, p1, p2, p3] = p;
+  const dx1 = p1.x - p2.x;
+  const dx2 = p3.x - p2.x;
+  const dx3 = p0.x - p1.x + p2.x - p3.x;
+  const dy1 = p1.y - p2.y;
+  const dy2 = p3.y - p2.y;
+  const dy3 = p0.y - p1.y + p2.y - p3.y;
+
+  if (Math.abs(dx3) < 1e-9 && Math.abs(dy3) < 1e-9) {
+    return {
+      a: p1.x - p0.x, b: p2.x - p1.x, c: p0.x,
+      d: p1.y - p0.y, e: p2.y - p1.y, f: p0.y,
+      g: 0, h: 0,
+    };
+  }
+  const den = dx1 * dy2 - dx2 * dy1 || 1e-9;
+  const g = (dx3 * dy2 - dx2 * dy3) / den;
+  const h = (dx1 * dy3 - dx3 * dy1) / den;
+  return {
+    a: p1.x - p0.x + g * p1.x,
+    b: p3.x - p0.x + h * p3.x,
+    c: p0.x,
+    d: p1.y - p0.y + g * p1.y,
+    e: p3.y - p0.y + h * p3.y,
+    f: p0.y,
+    g,
+    h,
+  };
+}
+
+/** src 캔버스에서 quad(픽셀좌표, TL/TR/BR/BL) 영역을 outW×outH 반듯한 사각형으로 원근 보정 */
+function perspectiveWarp(
+  src: HTMLCanvasElement,
+  quad: [Pt, Pt, Pt, Pt],
+  outW: number,
+  outH: number,
+): HTMLCanvasElement {
+  const sctx = src.getContext('2d', { willReadFrequently: true });
+  if (!sctx) throw new ImagePrepError('Canvas 컨텍스트를 만들 수 없습니다.');
+  const sd = sctx.getImageData(0, 0, src.width, src.height).data;
+  const sw = src.width;
+  const sh = src.height;
+
+  const { a, b, c, d, e, f, g, h } = squareToQuad(quad);
+  const { canvas: out, ctx: octx } = makeCanvas(outW, outH);
+  const oImg = octx.createImageData(outW, outH);
+  const od = oImg.data;
+
+  for (let y = 0; y < outH; y++) {
+    const v = (y + 0.5) / outH;
+    for (let x = 0; x < outW; x++) {
+      const u = (x + 0.5) / outW;
+      const denom = g * u + h * v + 1 || 1e-9;
+      let sx = (a * u + b * v + c) / denom;
+      let sy = (d * u + e * v + f) / denom;
+      if (sx < 0) sx = 0;
+      else if (sx > sw - 1) sx = sw - 1;
+      if (sy < 0) sy = 0;
+      else if (sy > sh - 1) sy = sh - 1;
+      const x0 = sx | 0;
+      const y0 = sy | 0;
+      const x1 = x0 + 1 < sw ? x0 + 1 : x0;
+      const y1 = y0 + 1 < sh ? y0 + 1 : y0;
+      const fx = sx - x0;
+      const fy = sy - y0;
+      const w00 = (1 - fx) * (1 - fy);
+      const w10 = fx * (1 - fy);
+      const w01 = (1 - fx) * fy;
+      const w11 = fx * fy;
+      const i00 = (y0 * sw + x0) * 4;
+      const i10 = (y0 * sw + x1) * 4;
+      const i01 = (y1 * sw + x0) * 4;
+      const i11 = (y1 * sw + x1) * 4;
+      const o = (y * outW + x) * 4;
+      od[o] = sd[i00] * w00 + sd[i10] * w10 + sd[i01] * w01 + sd[i11] * w11;
+      od[o + 1] = sd[i00 + 1] * w00 + sd[i10 + 1] * w10 + sd[i01 + 1] * w01 + sd[i11 + 1] * w11;
+      od[o + 2] = sd[i00 + 2] * w00 + sd[i10 + 2] * w10 + sd[i01 + 2] * w01 + sd[i11 + 2] * w11;
+      od[o + 3] = 255;
+    }
+  }
+  octx.putImageData(oImg, 0, 0);
+  return out;
+}
+
+/** 로컬 적응형 이진화 (적분영상). data 는 RGBA, R=G=B=그레이 가정 */
 function adaptiveThreshold(data: Uint8ClampedArray, w: number, h: number): number {
   const n = w * h;
   const gray = new Uint8ClampedArray(n);
@@ -150,10 +258,10 @@ function adaptiveThreshold(data: Uint8ClampedArray, w: number, h: number): numbe
       data[i + 3] = 255;
     }
   }
-  return whiteCount / n; // 흰색 비율
+  return whiteCount / n;
 }
 
-/** 그레이스케일 + 5~95 퍼센타일 대비 스트레치 (in-place) */
+/** 그레이스케일 + (옵션) 5~95 퍼센타일 대비 스트레치 (in-place) */
 function grayStretch(data: Uint8ClampedArray, stretch: boolean): void {
   const n = data.length / 4;
   const hist = new Uint32Array(256);
@@ -192,8 +300,7 @@ function grayStretch(data: Uint8ClampedArray, stretch: boolean): void {
 export async function rotateBlob(file: Blob, rotate: 90 | 180 | 270): Promise<Blob> {
   const bmp = await toBitmap(file);
   try {
-    const canvas = drawRotated(bmp, rotate);
-    return await canvasToBlob(canvas, 'image/jpeg', 0.92);
+    return await canvasToBlob(drawRotated(bmp, rotate), 'image/jpeg', 0.92);
   } finally {
     bmp.close();
   }
@@ -211,52 +318,73 @@ export async function makeThumbnail(file: Blob, longEdge = DISPLAY_LONG_EDGE): P
   }
 }
 
+function upscaleFactor(long: number): number {
+  const s = OCR_TARGET_LONG_EDGE / long;
+  if (s <= 1) return s;
+  return Math.min(s, MAX_UPSCALE);
+}
+
 export async function prepareForOcr(file: Blob, opts: PrepOptions = {}): Promise<PreparedImage> {
-  const { cropNorm, rotate = 0, mode = 'auto' } = opts;
+  const { cropNorm, quadNorm, rotate = 0, mode = 'auto' } = opts;
   const bmp = await toBitmap(file);
   try {
-    // 1) 회전
-    const rotated = drawRotated(bmp, rotate);
+    const rotated = downscale(drawRotated(bmp, rotate), SOURCE_MAX_LONG_EDGE);
 
-    // 2) 크롭 영역 (회전 좌표계 기준)
-    const c = cropNorm ?? { x: 0, y: 0, w: 1, h: 1 };
-    const cx = Math.max(0, Math.min(rotated.width - 1, Math.round(c.x * rotated.width)));
-    const cy = Math.max(0, Math.min(rotated.height - 1, Math.round(c.y * rotated.height)));
-    const cw = Math.max(1, Math.min(rotated.width - cx, Math.round(c.w * rotated.width)));
-    const ch = Math.max(1, Math.min(rotated.height - cy, Math.round(c.h * rotated.height)));
+    let canvas: HTMLCanvasElement;
+    if (quadNorm) {
+      // 원근 보정
+      const quadPx = quadNorm.map((p) => ({
+        x: p.x * rotated.width,
+        y: p.y * rotated.height,
+      })) as [Pt, Pt, Pt, Pt];
+      const targetW = (dist(quadPx[0], quadPx[1]) + dist(quadPx[3], quadPx[2])) / 2 || 1;
+      const targetH = (dist(quadPx[0], quadPx[3]) + dist(quadPx[1], quadPx[2])) / 2 || 1;
+      const s = upscaleFactor(Math.max(targetW, targetH));
+      canvas = perspectiveWarp(
+        rotated,
+        quadPx,
+        Math.max(1, Math.round(targetW * s)),
+        Math.max(1, Math.round(targetH * s)),
+      );
+    } else {
+      // 사각형 크롭 (기본 전체)
+      const c = cropNorm ?? { x: 0, y: 0, w: 1, h: 1 };
+      const cx = Math.max(0, Math.min(rotated.width - 1, Math.round(c.x * rotated.width)));
+      const cy = Math.max(0, Math.min(rotated.height - 1, Math.round(c.y * rotated.height)));
+      const cw = Math.max(1, Math.min(rotated.width - cx, Math.round(c.w * rotated.width)));
+      const ch = Math.max(1, Math.min(rotated.height - cy, Math.round(c.h * rotated.height)));
+      const s = upscaleFactor(Math.max(cw, ch));
+      const { canvas: cnv, ctx } = makeCanvas(cw * s, ch * s);
+      ctx.imageSmoothingQuality = 'high';
+      ctx.drawImage(rotated, cx, cy, cw, ch, 0, 0, cnv.width, cnv.height);
+      canvas = cnv;
+    }
 
-    // 3) 업스케일 배율
-    const cropLong = Math.max(cw, ch);
-    let scale = OCR_TARGET_LONG_EDGE / cropLong;
-    scale = scale > MAX_UPSCALE ? MAX_UPSCALE : scale < 1 ? scale : Math.min(scale, MAX_UPSCALE);
-    if (scale >= 0.999 && scale <= 1.001) scale = 1;
-    const w = Math.max(1, Math.round(cw * scale));
-    const h = Math.max(1, Math.round(ch * scale));
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    if (!ctx) throw new ImagePrepError('Canvas 컨텍스트를 만들 수 없습니다.');
+    const w = canvas.width;
+    const h = canvas.height;
 
-    const { canvas, ctx } = makeCanvas(w, h);
-    ctx.imageSmoothingQuality = 'high';
-    ctx.drawImage(rotated, cx, cy, cw, ch, 0, 0, w, h);
-
-    // 4) 표시용 컬러본
+    // 표시용 컬러본
     const dispScale = Math.min(1, DISPLAY_LONG_EDGE / Math.max(w, h));
     let displayBlob: Blob;
     if (dispScale < 1) {
       const { canvas: dc, ctx: dctx } = makeCanvas(w * dispScale, h * dispScale);
+      dctx.imageSmoothingQuality = 'high';
       dctx.drawImage(canvas, 0, 0, dc.width, dc.height);
       displayBlob = await canvasToBlob(dc, 'image/jpeg', 0.82);
     } else {
       displayBlob = await canvasToBlob(canvas, 'image/jpeg', 0.85);
     }
 
-    // 5) OCR 전처리
+    // OCR 전처리
     const img = ctx.getImageData(0, 0, w, h);
     if (mode === 'plain') {
       grayStretch(img.data, false);
     } else {
-      grayStretch(img.data, false); // 먼저 그레이스케일
+      grayStretch(img.data, false);
       const whiteRatio = adaptiveThreshold(img.data, w, h);
       if (mode === 'auto' && (whiteRatio > 0.97 || whiteRatio < 0.03)) {
-        // 이진화 실패 → 대비 스트레치로 폴백
         const fresh = ctx.getImageData(0, 0, w, h);
         grayStretch(fresh.data, true);
         img.data.set(fresh.data);

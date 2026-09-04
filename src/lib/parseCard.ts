@@ -120,13 +120,14 @@ function looksLikeCompanyLogo(s: string): boolean {
   if (/[0-9@]/.test(t)) return false;
   if (EMAIL_TEST.test(t) || extractPhones(t).length) return false;
   if (hasTitleWord(t)) return false;
-  // 라틴 대문자 위주 (로고 텍스트): "SOFTITECH", "ACME", "SOFT TECH"
+  if (!/^[A-Za-z][A-Za-z .|&-]+$/.test(t)) return false; // 라틴 문자/공백만
   const letters = t.replace(/[^A-Za-z]/g, '');
-  if (letters.length >= 3) {
-    const upper = letters.replace(/[^A-Z]/g, '').length;
-    if (upper / letters.length >= 0.6 && /^[A-Za-z][A-Za-z .|]+$/.test(t)) return true;
-  }
-  return false;
+  if (letters.length < 4) return false;
+  const upperRatio = letters.replace(/[^A-Z]/g, '').length / letters.length;
+  if (upperRatio < 0.6) return false;
+  // "OE EE" 같은 잡음 배제: 가장 긴 토큰이 4자 이상이어야 로고로 인정
+  const longest = Math.max(...t.split(/\s+/).map((w) => w.replace(/[^A-Za-z]/g, '').length));
+  return longest >= 4;
 }
 
 function normEmail(s: string): string {
@@ -276,8 +277,11 @@ export function parseCard(raw: string, hints: ParseHints = {}): ParseResult {
 
   // ---- 회사 폴백 ----
   if (!fields.company) {
-    // 1) 로고성 라틴 대문자 줄
-    const logoIdx = lines.findIndex((l, i) => !used.has(i) && looksLikeCompanyLogo(l));
+    // 1) 로고성 라틴 대문자 줄 (상단 60% 안)
+    const topCut = Math.max(3, Math.ceil(lines.length * 0.6));
+    const logoIdx = lines.findIndex(
+      (l, i) => !used.has(i) && i < topCut && looksLikeCompanyLogo(l),
+    );
     if (logoIdx >= 0) {
       fields.company = lines[logoIdx].trim();
       used.add(logoIdx);

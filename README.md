@@ -30,10 +30,11 @@ npm run setup:ocr    # 언어데이터 다운로드가 실패했을 때 온라�
 |------|------|------|
 | `worker.min.js` | Tesseract 워커 | `node_modules/tesseract.js` 복사 |
 | `core/tesseract-core*.wasm(.js)` | WASM 엔진 (simd/lstm 변형 포함) | `node_modules/tesseract.js-core` 복사 |
-| `lang/{kor,eng}.traineddata.gz` | 언어 데이터 (4.0.0 **fast** 모델) | `tessdata.projectnaptha.com` 다운로드 |
+| `lang/{kor,eng}.traineddata.gz` | fast 모델 (기본, ~3MB) | `tessdata.projectnaptha.com/4.0.0_fast` |
+| `lang-best/{kor,eng}.traineddata.gz` | best 모델 (토글 시, ~18MB) | `tessdata.projectnaptha.com/4.0.0` |
 
-- 앱 셸만 프리캐시되고, `/tesseract/*` 는 **첫 스캔 때 런타임 캐시**(CacheFirst)됩니다 → 설치는 가볍고, 한 번 스캔하면 오프라인 가능.
-- fast 모델은 용량이 작은 대신 정확도가 낮습니다. 정확도 우선이면 `setup-ocr.mjs` 의 `LANG_BASE` 를 `4.0.0` (best)로 바꾸세요. (M3에서 옵션화 예정)
+- 앱 셸만 프리캐시되고, `/tesseract/*` 는 **처음 필요할 때 런타임 캐시**(CacheFirst) → 설치는 가볍고, fast는 첫 스캔, best는 토글 켠 뒤 첫 스캔에서 1회 다운로드 후 오프라인.
+- 모델 전환은 스캔 화면의 "고정밀 한글 인식" 토글 (`localStorage: cardscan.ocrModel`). 실제 촬영본에선 best가 나을 수 있으나 깨끗한 스캔본에선 fast가 더 나을 때도 있어 opt-in.
 
 ## 배포 — GitHub Pages (설정 완료)
 
@@ -107,7 +108,8 @@ src/
 | **M1** | 카메라/앨범 업로드 + 이미지 전처리 + Tesseract 워커(자체호스팅) + OCR 원문 표시 | ✅ 완료 |
 | **M2** | `parseCard` 정교화(부서/직함 분리, 줄 크기 힌트 이름추출, 회사 유추) + 검토·편집 화면(자동추출 배지, 전화 표시형식, OCR 원문 줄→칸 배정, 이미지 확대) | ✅ 완료 |
 | **M3** | 수동 크롭·회전(`CropStep`), 로컬 적응형 이진화(`imagePrep`), EXIF 방향 보정, 파서 개선(이름+직함 분리·근접 유선번호→팩스·로고 회사명) | ✅ 완료 |
-| M3.5 | HEIC 자동 변환, best 모델 토글, 재인식(전처리 프리셋), PNG 아이콘 정식화 | ⬜ |
+| **M3.5** | 4점 원근 크롭(비스듬한 명함을 반듯하게 펴기), 고정밀(best) 한글 모델 토글 | ✅ 완료 |
+| M4 | HEIC 자동 변환, 재인식(전처리 프리셋), 중복 병합, PNG 아이콘 정식화, (선택) CLOVA 폴백 | ⬜ |
 | M4 | OpenCV.js 이진화, 중복 감지·병합, 태그 필터 | ⬜ |
 
 ## 알아둘 점

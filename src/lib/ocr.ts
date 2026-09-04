@@ -43,6 +43,29 @@ function assetUrl(path: string): string {
   return b + path;
 }
 
+// ---- 인식 모델 (fast / best) ----
+export type OcrModel = 'fast' | 'best';
+const MODEL_KEY = 'cardscan.ocrModel';
+
+export function getOcrModel(): OcrModel {
+  try {
+    return localStorage.getItem(MODEL_KEY) === 'best' ? 'best' : 'fast';
+  } catch {
+    return 'fast';
+  }
+}
+
+/** 모델 변경 시 현재 워커를 종료 → 다음 인식에서 새 언어데이터로 재생성 */
+export async function setOcrModel(model: OcrModel): Promise<void> {
+  if (getOcrModel() === model) return;
+  try {
+    localStorage.setItem(MODEL_KEY, model);
+  } catch {
+    /* 저장 실패해도 세션 내에서는 아래 종료로 반영 */
+  }
+  await terminateOcr();
+}
+
 let workerPromise: Promise<Worker> | null = null;
 let progressListener: ((p: OcrProgress) => void) | null = null;
 
@@ -53,7 +76,14 @@ function handleLog(m: { status?: string; progress?: number }): void {
   if (s === 'recognizing text') {
     progressListener({ phase: 'recognizing', progress, label: '텍스트 인식 중' });
   } else if (s.includes('traineddata') || s.includes('language')) {
-    progressListener({ phase: 'language', progress, label: '언어 데이터 준비 중 (최초 1회)' });
+    progressListener({
+      phase: 'language',
+      progress,
+      label:
+        getOcrModel() === 'best'
+          ? '고정밀 한글 데이터 준비 중 (최초 1회)'
+          : '언어 데이터 준비 중 (최초 1회)',
+    });
   } else if (s.includes('core') || s.includes('tesseract') || s.includes('api') || s.includes('initializ')) {
     progressListener({ phase: 'engine', progress, label: 'OCR 엔진 준비 중' });
   }
@@ -61,10 +91,11 @@ function handleLog(m: { status?: string; progress?: number }): void {
 
 function getWorker(): Promise<Worker> {
   if (!workerPromise) {
+    const langDir = getOcrModel() === 'best' ? 'lang-best' : 'lang';
     workerPromise = createWorker('kor+eng', OEM.LSTM_ONLY, {
       workerPath: assetUrl('/tesseract/worker.min.js'),
       corePath: assetUrl('/tesseract/core'),
-      langPath: assetUrl('/tesseract/lang'),
+      langPath: assetUrl(`/tesseract/${langDir}`),
       cacheMethod: 'none', // Service Worker(CacheFirst)가 캐시 담당 → 이중 저장 방지
       gzip: true,
       logger: handleLog,

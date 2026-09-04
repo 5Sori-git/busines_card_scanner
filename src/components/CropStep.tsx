@@ -1,28 +1,31 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { RotateCw, Scan, Maximize } from 'lucide-react';
-import { rotateBlob, type CropNorm } from '../lib/imagePrep';
+import { rotateBlob, type QuadNorm, type Pt } from '../lib/imagePrep';
 
 interface Props {
   file: Blob;
-  onConfirm: (result: { blob: Blob; cropNorm?: CropNorm }) => void;
+  onConfirm: (result: { blob: Blob; quadNorm?: QuadNorm }) => void;
   onCancel: () => void;
 }
 
-type Handle = 'nw' | 'ne' | 'sw' | 'se' | 'move';
+type CornerIdx = 0 | 1 | 2 | 3; // TL, TR, BR, BL
 
-const MIN = 0.12; // 최소 크롭 비율
+const DEFAULT: QuadNorm = [
+  { x: 0.06, y: 0.1 },
+  { x: 0.94, y: 0.1 },
+  { x: 0.94, y: 0.9 },
+  { x: 0.06, y: 0.9 },
+];
 
-function clamp(v: number, lo = 0, hi = 1) {
-  return v < lo ? lo : v > hi ? hi : v;
-}
+const clamp01 = (v: number) => (v < 0 ? 0 : v > 1 ? 1 : v);
 
 export default function CropStep({ file, onConfirm, onCancel }: Props) {
   const [blob, setBlob] = useState<Blob>(file);
   const [url, setUrl] = useState('');
-  const [rect, setRect] = useState<CropNorm>({ x: 0.04, y: 0.06, w: 0.92, h: 0.88 });
+  const [pts, setPts] = useState<QuadNorm>(DEFAULT.map((p) => ({ ...p })) as QuadNorm);
   const [busy, setBusy] = useState(false);
   const boxRef = useRef<HTMLDivElement>(null);
-  const drag = useRef<{ h: Handle; sx: number; sy: number; start: CropNorm } | null>(null);
+  const drag = useRef<{ i: CornerIdx; sx: number; sy: number; start: Pt } | null>(null);
 
   useEffect(() => {
     const u = URL.createObjectURL(blob);
@@ -31,13 +34,13 @@ export default function CropStep({ file, onConfirm, onCancel }: Props) {
   }, [blob]);
 
   const onPointerDown = useCallback(
-    (h: Handle) => (e: React.PointerEvent) => {
+    (i: CornerIdx) => (e: React.PointerEvent) => {
       e.preventDefault();
       e.stopPropagation();
       (e.target as HTMLElement).setPointerCapture(e.pointerId);
-      drag.current = { h, sx: e.clientX, sy: e.clientY, start: rect };
+      drag.current = { i, sx: e.clientX, sy: e.clientY, start: { ...pts[i] } };
     },
-    [rect],
+    [pts],
   );
 
   const onPointerMove = useCallback((e: React.PointerEvent) => {
@@ -46,33 +49,13 @@ export default function CropStep({ file, onConfirm, onCancel }: Props) {
     if (!d || !box) return;
     const bw = box.clientWidth || 1;
     const bh = box.clientHeight || 1;
-    const dx = (e.clientX - d.sx) / bw;
-    const dy = (e.clientY - d.sy) / bh;
-    const s = d.start;
-    let { x, y, w, h } = s;
-
-    if (d.h === 'move') {
-      x = clamp(s.x + dx, 0, 1 - s.w);
-      y = clamp(s.y + dy, 0, 1 - s.h);
-    } else {
-      const west = d.h === 'nw' || d.h === 'sw';
-      const north = d.h === 'nw' || d.h === 'ne';
-      if (west) {
-        const nx = clamp(s.x + dx, 0, s.x + s.w - MIN);
-        w = s.x + s.w - nx;
-        x = nx;
-      } else {
-        w = clamp(s.w + dx, MIN, 1 - s.x);
-      }
-      if (north) {
-        const ny = clamp(s.y + dy, 0, s.y + s.h - MIN);
-        h = s.y + s.h - ny;
-        y = ny;
-      } else {
-        h = clamp(s.h + dy, MIN, 1 - s.y);
-      }
-    }
-    setRect({ x, y, w, h });
+    const nx = clamp01(d.start.x + (e.clientX - d.sx) / bw);
+    const ny = clamp01(d.start.y + (e.clientY - d.sy) / bh);
+    setPts((prev) => {
+      const next = prev.map((p) => ({ ...p })) as QuadNorm;
+      next[d.i] = { x: nx, y: ny };
+      return next;
+    });
   }, []);
 
   const onPointerUp = useCallback(() => {
@@ -83,15 +66,15 @@ export default function CropStep({ file, onConfirm, onCancel }: Props) {
     if (busy) return;
     setBusy(true);
     try {
-      const rotated = await rotateBlob(blob, 90);
-      setBlob(rotated);
-      setRect({ x: 0.04, y: 0.06, w: 0.92, h: 0.88 });
+      setBlob(await rotateBlob(blob, 90));
+      setPts(DEFAULT.map((p) => ({ ...p })) as QuadNorm);
     } finally {
       setBusy(false);
     }
   }
 
-  const pct = (n: number) => `${n * 100}%`;
+  const S = 1000;
+  const poly = pts.map((p) => `${p.x * S},${p.y * S}`).join(' ');
 
   return (
     <div className="flex flex-1 flex-col">
@@ -103,46 +86,44 @@ export default function CropStep({ file, onConfirm, onCancel }: Props) {
           onPointerUp={onPointerUp}
           onPointerCancel={onPointerUp}
         >
-          {url && <img src={url} alt="크롭할 명함" className="block max-h-[62vh] w-auto object-contain" draggable={false} />}
+          {url && (
+            <img
+              src={url}
+              alt="크롭할 명함"
+              className="block max-h-[62vh] w-auto object-contain"
+              draggable={false}
+            />
+          )}
 
-          {/* 바깥 어둡게 */}
-          <div
-            className="pointer-events-none absolute border border-white/90"
-            style={{
-              left: pct(rect.x),
-              top: pct(rect.y),
-              width: pct(rect.w),
-              height: pct(rect.h),
-              boxShadow: '0 0 0 9999px rgba(0,0,0,0.55)',
-            }}
-          />
-          {/* 이동 영역 */}
-          <div
-            className="absolute cursor-move"
-            style={{ left: pct(rect.x), top: pct(rect.y), width: pct(rect.w), height: pct(rect.h) }}
-            onPointerDown={onPointerDown('move')}
-          />
-          {/* 모서리 핸들 */}
-          {(['nw', 'ne', 'sw', 'se'] as Handle[]).map((h) => {
-            const left = h === 'nw' || h === 'sw' ? rect.x : rect.x + rect.w;
-            const top = h === 'nw' || h === 'ne' ? rect.y : rect.y + rect.h;
-            return (
-              <div
-                key={h}
-                onPointerDown={onPointerDown(h)}
-                className="absolute h-11 w-11 -translate-x-1/2 -translate-y-1/2 rounded-full"
-                style={{ left: pct(left), top: pct(top) }}
-              >
-                <div className="absolute left-1/2 top-1/2 h-5 w-5 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white bg-brand shadow" />
-              </div>
-            );
-          })}
+          <svg
+            className="pointer-events-none absolute inset-0 h-full w-full"
+            viewBox={`0 0 ${S} ${S}`}
+            preserveAspectRatio="none"
+          >
+            <path
+              d={`M0,0 H${S} V${S} H0 Z M ${poly} Z`}
+              fill="rgba(0,0,0,0.55)"
+              fillRule="evenodd"
+            />
+            <polygon points={poly} fill="none" stroke="#fff" strokeWidth={2} vectorEffect="non-scaling-stroke" />
+          </svg>
+
+          {pts.map((p, i) => (
+            <div
+              key={i}
+              onPointerDown={onPointerDown(i as CornerIdx)}
+              className="absolute h-11 w-11 -translate-x-1/2 -translate-y-1/2"
+              style={{ left: `${p.x * 100}%`, top: `${p.y * 100}%` }}
+            >
+              <div className="absolute left-1/2 top-1/2 h-5 w-5 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white bg-brand shadow" />
+            </div>
+          ))}
         </div>
       </div>
 
       <div className="border-t border-slate-200 bg-white px-4 pb-[max(env(safe-area-inset-bottom),0.75rem)] pt-3">
         <p className="mb-2 text-center text-xs text-slate-500">
-          명함 테두리에 맞춰 영역을 조절하세요. 기울었으면 회전.
+          명함의 네 모서리에 점을 맞추세요. 비스듬해도 반듯하게 펴집니다.
         </p>
         <div className="flex gap-2">
           <button
@@ -155,7 +136,7 @@ export default function CropStep({ file, onConfirm, onCancel }: Props) {
           </button>
           <button
             type="button"
-            onClick={() => onConfirm({ blob, cropNorm: rect })}
+            onClick={() => onConfirm({ blob, quadNorm: pts })}
             className="flex flex-1 items-center justify-center gap-1.5 rounded-xl bg-brand py-3 font-semibold text-white active:bg-brand-700"
           >
             <Scan size={18} /> 이 영역 인식

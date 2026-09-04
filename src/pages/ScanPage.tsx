@@ -1,10 +1,10 @@
 import { useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Camera, Images, Keyboard, RotateCcw } from 'lucide-react';
+import { Camera, Images, Keyboard, RotateCcw, Sparkles } from 'lucide-react';
 import AppHeader from '../components/AppHeader';
 import CropStep from '../components/CropStep';
-import { prepareForOcr, ImagePrepError, type CropNorm } from '../lib/imagePrep';
-import { runOcr, OcrError, type OcrProgress } from '../lib/ocr';
+import { prepareForOcr, ImagePrepError, type QuadNorm } from '../lib/imagePrep';
+import { runOcr, OcrError, getOcrModel, setOcrModel, type OcrProgress } from '../lib/ocr';
 import { parseCard } from '../lib/parseCard';
 import { saveImage } from '../db';
 import { newId } from '../lib/id';
@@ -20,6 +20,13 @@ export default function ScanPage() {
   const [pickedFile, setPickedFile] = useState<File | null>(null);
   const [progress, setProgress] = useState<OcrProgress | null>(null);
   const [errorMsg, setErrorMsg] = useState('');
+  const [hiRes, setHiRes] = useState(getOcrModel() === 'best');
+
+  async function toggleHiRes() {
+    const next = !hiRes;
+    setHiRes(next);
+    await setOcrModel(next ? 'best' : 'fast');
+  }
 
   function handlePick(file: File | undefined) {
     if (!file) return;
@@ -29,10 +36,10 @@ export default function ScanPage() {
     setPhase('crop');
   }
 
-  async function runPipeline(blob: Blob, cropNorm?: CropNorm) {
+  async function runPipeline(blob: Blob, quadNorm?: QuadNorm) {
     setPhase('prep');
     try {
-      const prepared = await prepareForOcr(blob, { cropNorm, mode: 'auto' });
+      const prepared = await prepareForOcr(blob, { quadNorm, mode: 'auto' });
 
       setPhase('ocr');
       const result = await runOcr(prepared.ocrBlob, setProgress);
@@ -77,7 +84,7 @@ export default function ScanPage() {
             setPickedFile(null);
             setPhase('idle');
           }}
-          onConfirm={({ blob, cropNorm }) => void runPipeline(blob, cropNorm)}
+          onConfirm={({ blob, quadNorm }) => void runPipeline(blob, quadNorm)}
         />
       </>
     );
@@ -117,10 +124,36 @@ export default function ScanPage() {
         />
 
         {phase === 'idle' && (
-          <p className="mb-4 text-sm text-slate-500">
-            명함이 화면을 크게 차지하도록, 밝고 그림자 없는 곳에서 정면으로 찍으세요. 다음 화면에서
-            명함 영역만 잘라낼 수 있습니다. 모든 처리는 이 기기 안에서만 이뤄집니다.
-          </p>
+          <>
+            <p className="mb-4 text-sm text-slate-500">
+              명함이 화면을 크게 차지하도록, 밝고 그림자 없는 곳에서 정면으로 찍으세요. 다음 화면에서
+              네 모서리를 맞추면 비스듬해도 반듯하게 펴집니다. 모든 처리는 이 기기 안에서만 이뤄집니다.
+            </p>
+            <button
+              type="button"
+              onClick={() => void toggleHiRes()}
+              className="mb-2 flex w-full items-start gap-3 rounded-xl border border-slate-200 bg-white p-3 text-left active:bg-slate-50"
+            >
+              <span
+                className={`mt-0.5 flex h-5 w-9 shrink-0 items-center rounded-full p-0.5 transition-colors ${
+                  hiRes ? 'bg-brand' : 'bg-slate-300'
+                }`}
+              >
+                <span
+                  className={`h-4 w-4 rounded-full bg-white transition-transform ${hiRes ? 'translate-x-4' : ''}`}
+                />
+              </span>
+              <span className="text-sm">
+                <span className="flex items-center gap-1 font-medium text-slate-800">
+                  <Sparkles size={14} className="text-brand" /> 고정밀 한글 인식
+                </span>
+                <span className="text-slate-500">
+                  실제 촬영본(노이즈·저조도)에서 한글 정확도가 오를 수 있습니다. 켜면 첫 스캔에서 약
+                  18MB를 한 번 내려받습니다. 결과를 비교해 보고 나은 쪽으로 두세요.
+                </span>
+              </span>
+            </button>
+          </>
         )}
 
         {busy && (
@@ -146,7 +179,7 @@ export default function ScanPage() {
             </div>
             {progress?.phase === 'language' && (
               <p className="mt-2 text-center text-xs text-slate-400">
-                한국어 인식 데이터를 처음 한 번만 내려받습니다 (약 10MB).
+                인식 데이터를 처음 한 번만 내려받습니다{hiRes ? ' (약 18MB)' : ' (약 3MB)'}.
               </p>
             )}
           </div>
