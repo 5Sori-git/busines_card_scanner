@@ -1,14 +1,15 @@
-import { useEffect, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Camera, Images, Keyboard, RotateCcw } from 'lucide-react';
 import AppHeader from '../components/AppHeader';
-import { prepareForOcr, ImagePrepError } from '../lib/imagePrep';
+import CropStep from '../components/CropStep';
+import { prepareForOcr, ImagePrepError, type CropNorm } from '../lib/imagePrep';
 import { runOcr, OcrError, type OcrProgress } from '../lib/ocr';
 import { parseCard } from '../lib/parseCard';
 import { saveImage } from '../db';
 import { newId } from '../lib/id';
 
-type Phase = 'idle' | 'prep' | 'ocr' | 'error';
+type Phase = 'idle' | 'crop' | 'prep' | 'ocr' | 'error';
 
 export default function ScanPage() {
   const navigate = useNavigate();
@@ -16,32 +17,22 @@ export default function ScanPage() {
   const albumRef = useRef<HTMLInputElement>(null);
 
   const [phase, setPhase] = useState<Phase>('idle');
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [pickedFile, setPickedFile] = useState<File | null>(null);
   const [progress, setProgress] = useState<OcrProgress | null>(null);
   const [errorMsg, setErrorMsg] = useState('');
 
-  useEffect(() => {
-    return () => {
-      if (previewUrl) URL.revokeObjectURL(previewUrl);
-    };
-  }, [previewUrl]);
-
-  async function handleFile(file: File | undefined) {
+  function handlePick(file: File | undefined) {
     if (!file) return;
     setErrorMsg('');
     setProgress(null);
-    setPreviewUrl((old) => {
-      if (old) URL.revokeObjectURL(old);
-      return URL.createObjectURL(file);
-    });
-    setPhase('prep');
+    setPickedFile(file);
+    setPhase('crop');
+  }
 
+  async function runPipeline(blob: Blob, cropNorm?: CropNorm) {
+    setPhase('prep');
     try {
-      const prepared = await prepareForOcr(file);
-      setPreviewUrl((old) => {
-        if (old) URL.revokeObjectURL(old);
-        return URL.createObjectURL(prepared.displayBlob);
-      });
+      const prepared = await prepareForOcr(blob, { cropNorm, mode: 'auto' });
 
       setPhase('ocr');
       const result = await runOcr(prepared.ocrBlob, setProgress);
@@ -76,13 +67,25 @@ export default function ScanPage() {
     }
   }
 
+  if (phase === 'crop' && pickedFile) {
+    return (
+      <>
+        <AppHeader title="영역 조절" back="/" />
+        <CropStep
+          file={pickedFile}
+          onCancel={() => {
+            setPickedFile(null);
+            setPhase('idle');
+          }}
+          onConfirm={({ blob, cropNorm }) => void runPipeline(blob, cropNorm)}
+        />
+      </>
+    );
+  }
+
   const busy = phase === 'prep' || phase === 'ocr';
   const pct =
-    phase === 'prep'
-      ? null
-      : progress?.phase === 'recognizing'
-        ? Math.round(progress.progress * 100)
-        : null;
+    phase === 'ocr' && progress?.phase === 'recognizing' ? Math.round(progress.progress * 100) : null;
 
   return (
     <>
@@ -98,7 +101,7 @@ export default function ScanPage() {
           onChange={(e) => {
             const f = e.target.files?.[0];
             e.target.value = '';
-            void handleFile(f);
+            handlePick(f);
           }}
         />
         <input
@@ -109,20 +112,14 @@ export default function ScanPage() {
           onChange={(e) => {
             const f = e.target.files?.[0];
             e.target.value = '';
-            void handleFile(f);
+            handlePick(f);
           }}
         />
 
-        {previewUrl && (
-          <div className="mb-4 overflow-hidden rounded-xl border border-slate-200 bg-slate-900/5">
-            <img src={previewUrl} alt="명함 미리보기" className="mx-auto max-h-72 w-full object-contain" />
-          </div>
-        )}
-
         {phase === 'idle' && (
           <p className="mb-4 text-sm text-slate-500">
-            명함이 화면을 꽉 채우도록, 밝고 그림자 없는 곳에서 정면으로 찍으면 인식률이 높습니다.
-            모든 처리는 이 기기 안에서만 이뤄집니다.
+            명함이 화면을 크게 차지하도록, 밝고 그림자 없는 곳에서 정면으로 찍으세요. 다음 화면에서
+            명함 영역만 잘라낼 수 있습니다. 모든 처리는 이 기기 안에서만 이뤄집니다.
           </p>
         )}
 

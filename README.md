@@ -88,13 +88,16 @@ src/
     download.ts  id.ts 파일 다운로드 / UUID
   components/
     ContactForm.tsx    필드 폼 (자동추출 "자동" 배지)
+    CropStep.tsx       스캔 전 명함 영역 크롭 + 90° 회전
     ImageZoom.tsx      탭하면 전체화면 확대(핀치줌)
   pages/
     ListPage.tsx       목록·검색·내보내기 메뉴
-    ScanPage.tsx       카메라/앨범 → 전처리 → OCR(+줄 bbox) → parseCard → 편집화면
+    ScanPage.tsx       카메라/앨범 → 크롭 → 전처리 → OCR(+줄 bbox) → parseCard → 편집화면
     EditPage.tsx       신규/편집 폼. 전화번호 표시형식 편집, OCR 원문 줄→칸 배정, 자동추출 배지
     DetailPage.tsx     상세·전화/메일 링크·vCard·삭제
 ```
+
+전처리(`imagePrep`) 모드: `plain`(그레이스케일만) / `binarize`(로컬 적응형 이진화) / `auto`(binarize 후 실패 시 대비스트레치 폴백, 기본값).
 
 ## 마일스톤
 
@@ -103,7 +106,8 @@ src/
 | **M0** | 셋업, PWA, Dexie, 연락처 CRUD, vCard/CSV/JSON 내보내기·가져오기 | ✅ 완료 |
 | **M1** | 카메라/앨범 업로드 + 이미지 전처리 + Tesseract 워커(자체호스팅) + OCR 원문 표시 | ✅ 완료 |
 | **M2** | `parseCard` 정교화(부서/직함 분리, 줄 크기 힌트 이름추출, 회사 유추) + 검토·편집 화면(자동추출 배지, 전화 표시형식, OCR 원문 줄→칸 배정, 이미지 확대) | ✅ 완료 |
-| M3 | HEIC 변환, EXIF 회전 보정, best 모델 옵션, 전처리 튜닝, 재인식, PNG 아이콘 정식화 | ⬜ |
+| **M3** | 수동 크롭·회전(`CropStep`), 로컬 적응형 이진화(`imagePrep`), EXIF 방향 보정, 파서 개선(이름+직함 분리·근접 유선번호→팩스·로고 회사명) | ✅ 완료 |
+| M3.5 | HEIC 자동 변환, best 모델 토글, 재인식(전처리 프리셋), PNG 아이콘 정식화 | ⬜ |
 | M4 | OpenCV.js 이진화, 중복 감지·병합, 태그 필터 | ⬜ |
 
 ## 알아둘 점
