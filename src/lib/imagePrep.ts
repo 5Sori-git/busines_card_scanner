@@ -306,6 +306,186 @@ export async function rotateBlob(file: Blob, rotate: 90 | 180 | 270): Promise<Bl
   }
 }
 
+// ---- 카드 테두리 자동 검출 ----
+// 라이브러리 없이: 축소 → 그레이스케일 → Otsu 이진화 → 최대 연결영역 → 극점 4개를 모서리로.
+// 밝은 명함/어두운 배경(또는 반대) 모두 시도해서 더 그럴듯한 쪽 선택. 실패하면 null.
+
+const clamp01 = (v: number) => (v < 0 ? 0 : v > 1 ? 1 : v);
+
+function otsu(hist: Uint32Array, total: number): number {
+  let sum = 0;
+  for (let t = 0; t < 256; t++) sum += t * hist[t];
+  let sumB = 0;
+  let wB = 0;
+  let maxVar = -1;
+  let thr = 127;
+  for (let t = 0; t < 256; t++) {
+    wB += hist[t];
+    if (!wB) continue;
+    const wF = total - wB;
+    if (!wF) break;
+    sumB += t * hist[t];
+    const mB = sumB / wB;
+    const mF = (sum - sumB) / wF;
+    const between = wB * wF * (mB - mF) * (mB - mF);
+    if (between > maxVar) {
+      maxVar = between;
+      thr = t;
+    }
+  }
+  return thr;
+}
+
+interface QuadCandidate {
+  quad: [Pt, Pt, Pt, Pt];
+  areaFrac: number;
+  solidity: number; // 영역크기 / bbox넓이
+}
+
+function largestBlobQuad(
+  gray: Uint8Array,
+  w: number,
+  h: number,
+  thr: number,
+  bright: boolean,
+): QuadCandidate | null {
+  const n = w * h;
+  const inMask = (p: number) => (bright ? gray[p] > thr : gray[p] < thr);
+  const label = new Int32Array(n);
+  let bestId = 0;
+  let bestSize = 0;
+  let cur = 0;
+  const stack: number[] = [];
+  for (let p = 0; p < n; p++) {
+    if (label[p] || !inMask(p)) continue;
+    cur++;
+    let size = 0;
+    stack.length = 0;
+    stack.push(p);
+    label[p] = cur;
+    while (stack.length) {
+      const q = stack.pop() as number;
+      size++;
+      const qx = q % w;
+      if (qx > 0 && !label[q - 1] && inMask(q - 1)) {
+        label[q - 1] = cur;
+        stack.push(q - 1);
+      }
+      if (qx < w - 1 && !label[q + 1] && inMask(q + 1)) {
+        label[q + 1] = cur;
+        stack.push(q + 1);
+      }
+      if (q >= w && !label[q - w] && inMask(q - w)) {
+        label[q - w] = cur;
+        stack.push(q - w);
+      }
+      if (q < n - w && !label[q + w] && inMask(q + w)) {
+        label[q + w] = cur;
+        stack.push(q + w);
+      }
+    }
+    if (size > bestSize) {
+      bestSize = size;
+      bestId = cur;
+    }
+  }
+  if (!bestId) return null;
+  const areaFrac = bestSize / n;
+  if (areaFrac < 0.15 || areaFrac > 0.985) return null;
+
+  let top: Pt = { x: 0, y: 1e9 };
+  let bot: Pt = { x: 0, y: -1 };
+  let left: Pt = { x: 1e9, y: 0 };
+  let right: Pt = { x: -1, y: 0 };
+  let minX = 1e9;
+  let minY = 1e9;
+  let maxX = -1;
+  let maxY = -1;
+  for (let p = 0; p < n; p++) {
+    if (label[p] !== bestId) continue;
+    const x = p % w;
+    const y = (p / w) | 0;
+    if (y < top.y || (y === top.y && x < top.x)) top = { x, y };
+    if (y > bot.y || (y === bot.y && x > bot.x)) bot = { x, y };
+    if (x < left.x || (x === left.x && y > left.y)) left = { x, y };
+    if (x > right.x || (x === right.x && y < right.y)) right = { x, y };
+    if (x < minX) minX = x;
+    if (x > maxX) maxX = x;
+    if (y < minY) minY = y;
+    if (y > maxY) maxY = y;
+  }
+  const bboxArea = (maxX - minX + 1) * (maxY - minY + 1) || 1;
+  const solidity = bestSize / bboxArea;
+
+  const pts = [top, right, bot, left];
+  const bySum = [...pts].sort((a, b) => a.x + a.y - (b.x + b.y));
+  const byDiff = [...pts].sort((a, b) => a.y - a.x - (b.y - b.x));
+  const tl = bySum[0];
+  const br = bySum[3];
+  const tr = byDiff[0];
+  const bl = byDiff[3];
+  const quad: [Pt, Pt, Pt, Pt] = [tl, tr, br, bl];
+  if (new Set(quad.map((p) => `${p.x},${p.y}`)).size < 4) return null;
+
+  let area2 = 0;
+  for (let i = 0; i < 4; i++) {
+    const j = (i + 1) % 4;
+    area2 += quad[i].x * quad[j].y - quad[j].x * quad[i].y;
+  }
+  if (Math.abs(area2) / 2 / n < 0.12) return null;
+
+  return { quad, areaFrac, solidity };
+}
+
+/** 카드 네 모서리 자동 추정. 못 찾으면 null. */
+export async function detectCardQuad(file: Blob): Promise<QuadNorm | null> {
+  const bmp = await toBitmap(file);
+  try {
+    const s = 480 / Math.max(bmp.width, bmp.height);
+    const w = Math.max(1, Math.round(bmp.width * Math.min(1, s)));
+    const h = Math.max(1, Math.round(bmp.height * Math.min(1, s)));
+    const { ctx } = makeCanvas(w, h);
+    ctx.drawImage(bmp, 0, 0, w, h);
+    const d = ctx.getImageData(0, 0, w, h).data;
+
+    const gray = new Uint8Array(w * h);
+    const hist = new Uint32Array(256);
+    for (let i = 0, g = 0; i < d.length; i += 4, g++) {
+      const v = (d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114) | 0;
+      gray[g] = v;
+      hist[v]++;
+    }
+    const thr = otsu(hist, w * h);
+
+    const cands = [
+      largestBlobQuad(gray, w, h, thr, true),
+      largestBlobQuad(gray, w, h, thr, false),
+    ].filter((c): c is QuadCandidate => !!c);
+    if (!cands.length) return null;
+
+    // 면적이 20~90%에 가깝고 solidity(사각형다움)가 높은 후보 선택
+    const score = (c: QuadCandidate) => {
+      const areaPenalty = Math.abs(c.areaFrac - 0.5);
+      return c.solidity - areaPenalty * 0.6;
+    };
+    cands.sort((a, b) => score(b) - score(a));
+    const best = cands[0];
+    if (best.solidity < 0.62) return null;
+
+    const cx = (best.quad[0].x + best.quad[1].x + best.quad[2].x + best.quad[3].x) / 4;
+    const cy = (best.quad[0].y + best.quad[1].y + best.quad[2].y + best.quad[3].y) / 4;
+    const out = best.quad.map((p) => ({
+      x: clamp01((p.x + (p.x - cx) * 0.03) / w),
+      y: clamp01((p.y + (p.y - cy) * 0.03) / h),
+    })) as QuadNorm;
+    return out;
+  } catch {
+    return null;
+  } finally {
+    bmp.close();
+  }
+}
+
 export async function makeThumbnail(file: Blob, longEdge = DISPLAY_LONG_EDGE): Promise<Blob> {
   const bmp = await toBitmap(file);
   try {

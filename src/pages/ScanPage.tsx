@@ -3,14 +3,15 @@ import { Link, useNavigate } from 'react-router-dom';
 import { Camera, Images, Keyboard, RotateCcw, Cpu, Cloud, ChevronRight } from 'lucide-react';
 import AppHeader from '../components/AppHeader';
 import CropStep from '../components/CropStep';
-import { prepareForOcr, ImagePrepError, type QuadNorm } from '../lib/imagePrep';
-import { runOcr, OcrError, getOcrModel, type OcrProgress } from '../lib/ocr';
-import { runCloudOcr, CloudOcrError, getEngine } from '../lib/cloudOcr';
+import { ImagePrepError, type QuadNorm } from '../lib/imagePrep';
+import { OcrError, getOcrModel, type OcrProgress } from '../lib/ocr';
+import { CloudOcrError, getEngine } from '../lib/cloudOcr';
+import { recognizeImage } from '../lib/recognize';
 import { parseCard } from '../lib/parseCard';
 import { saveImage } from '../db';
 import { newId } from '../lib/id';
 
-type Phase = 'idle' | 'crop' | 'prep' | 'ocr' | 'error';
+type Phase = 'idle' | 'crop' | 'ocr' | 'error';
 
 export default function ScanPage() {
   const navigate = useNavigate();
@@ -34,15 +35,13 @@ export default function ScanPage() {
   }
 
   async function runPipeline(blob: Blob, quadNorm?: QuadNorm) {
-    setPhase('prep');
+    setPhase('ocr');
+    setProgress({ phase: 'engine', progress: 0.1, label: '이미지 준비 중' });
     try {
-      const prepared = await prepareForOcr(blob, { quadNorm, mode: 'auto' });
-
-      setPhase('ocr');
-      const result =
-        engine === 'vision'
-          ? await runCloudOcr(prepared.displayBlob, setProgress)
-          : await runOcr(prepared.ocrBlob, setProgress);
+      const { prepared, result } = await recognizeImage(blob, {
+        quadNorm,
+        onProgress: setProgress,
+      });
 
       const imageId = newId();
       await saveImage({
@@ -90,7 +89,7 @@ export default function ScanPage() {
     );
   }
 
-  const busy = phase === 'prep' || phase === 'ocr';
+  const busy = phase === 'ocr';
   const pct =
     phase === 'ocr' && progress?.phase === 'recognizing' ? Math.round(progress.progress * 100) : null;
 
@@ -159,7 +158,7 @@ export default function ScanPage() {
         {busy && (
           <div className="my-6">
             <p className="mb-2 text-center text-sm font-medium text-slate-700">
-              {phase === 'prep' ? '이미지 준비 중' : (progress?.label ?? '처리 중')}
+              {progress?.label ?? '처리 중'}
               {pct !== null ? ` · ${pct}%` : ''}
             </p>
             <div className="h-2 w-full overflow-hidden rounded-full bg-slate-200">
@@ -171,7 +170,7 @@ export default function ScanPage() {
                       ? `${pct}%`
                       : progress?.phase === 'language'
                         ? '66%'
-                        : phase === 'prep'
+                        : progress?.phase === 'engine'
                           ? '15%'
                           : '40%',
                 }}
