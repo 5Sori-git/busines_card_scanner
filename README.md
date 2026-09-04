@@ -92,15 +92,20 @@ src/
     CropStep.tsx       스캔 전 명함 영역 크롭 + 90° 회전
     ImageZoom.tsx      탭하면 전체화면 확대(핀치줌)
   lib/
+    imagePrep.ts       회전·크롭·원근보정·적응형이진화 + detectCardQuad(테두리 자동검출)
     ocr.ts             Tesseract 워커(기기 인식) + fast/best 모델 전환
     cloudOcr.ts        Google Cloud Vision(BYOK) + 엔진(device/vision) 선택
+    recognize.ts       전처리→(기기/Vision) 인식 공통 경로 (ScanPage·EditPage 재인식 공용)
   pages/
     ListPage.tsx       목록·검색·내보내기·설정 메뉴
     ScanPage.tsx       카메라/앨범 → 크롭 → 전처리 → (기기 또는 Vision) 인식 → parseCard → 편집
-    EditPage.tsx       신규/편집 폼. 전화번호 표시형식 편집, OCR 원문 줄→칸 배정, 자동추출 배지
+    EditPage.tsx       신규/편집 폼. 재인식(엔진·전처리 프리셋), 전화 표시형식, OCR 원문 줄→칸 배정
     DetailPage.tsx     상세·전화/메일 링크·vCard·삭제
     SettingsPage.tsx   인식 엔진(기기/Vision) · 기기 모델(fast/best) · Vision API 키 관리
 ```
+
+**테두리 자동 검출**: 축소→Otsu 이진화→최대 연결영역의 극점 4개를 모서리로 (밝은/어두운 극성 둘 다 시도).
+어두운 장식 띠가 있는 명함은 그 부분이 빠질 수 있어 사용자가 모서리를 미세조정 (CropStep의 "자동" 버튼으로 재시도).
 
 전처리(`imagePrep`) 모드: `plain`(그레이스케일만) / `binarize`(로컬 적응형 이진화) / `auto`(binarize 후 실패 시 대비스트레치 폴백, 기본값).
 
@@ -114,7 +119,8 @@ src/
 | **M3** | 수동 크롭·회전(`CropStep`), 로컬 적응형 이진화(`imagePrep`), EXIF 방향 보정, 파서 개선(이름+직함 분리·근접 유선번호→팩스·로고 회사명) | ✅ 완료 |
 | **M3.5** | 4점 원근 크롭(비스듬한 명함을 반듯하게 펴기), 고정밀(best) 한글 모델 토글 | ✅ 완료 |
 | **M4** | 선택적 Google Cloud Vision 인식(BYOK: 사용자 API 키 직접 입력), 설정 화면 | ✅ 완료 |
-| M5 | HEIC 자동 변환, 재인식(전처리 프리셋), 중복 병합, PNG 아이콘 정식화 | ⬜ |
+| **M5** | 카드 테두리 자동 검출(CropStep), 편집 화면에서 재인식(엔진·전처리 프리셋) | ✅ 완료 |
+| M6 | HEIC 자동 변환, 중복 병합, 초성 검색·태그 필터, PNG 아이콘 정식화 | ⬜ |
 | M4 | OpenCV.js 이진화, 중복 감지·병합, 태그 필터 | ⬜ |
 
 ## Google Cloud Vision (선택 · BYOK)

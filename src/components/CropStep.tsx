@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { RotateCw, Scan, Maximize } from 'lucide-react';
-import { rotateBlob, type QuadNorm, type Pt } from '../lib/imagePrep';
+import { RotateCw, Scan, Maximize, Wand2 } from 'lucide-react';
+import { rotateBlob, detectCardQuad, type QuadNorm, type Pt } from '../lib/imagePrep';
 
 interface Props {
   file: Blob;
@@ -16,16 +16,19 @@ const DEFAULT: QuadNorm = [
   { x: 0.94, y: 0.9 },
   { x: 0.06, y: 0.9 },
 ];
-
+const cloneQuad = (q: QuadNorm) => q.map((p) => ({ ...p })) as QuadNorm;
 const clamp01 = (v: number) => (v < 0 ? 0 : v > 1 ? 1 : v);
 
 export default function CropStep({ file, onConfirm, onCancel }: Props) {
   const [blob, setBlob] = useState<Blob>(file);
   const [url, setUrl] = useState('');
-  const [pts, setPts] = useState<QuadNorm>(DEFAULT.map((p) => ({ ...p })) as QuadNorm);
+  const [pts, setPts] = useState<QuadNorm>(cloneQuad(DEFAULT));
   const [busy, setBusy] = useState(false);
+  const [detecting, setDetecting] = useState(true);
+  const [note, setNote] = useState<'detected' | 'manual' | null>(null);
   const boxRef = useRef<HTMLDivElement>(null);
   const drag = useRef<{ i: CornerIdx; sx: number; sy: number; start: Pt } | null>(null);
+  const touched = useRef(false);
 
   useEffect(() => {
     const u = URL.createObjectURL(blob);
@@ -33,11 +36,36 @@ export default function CropStep({ file, onConfirm, onCancel }: Props) {
     return () => URL.revokeObjectURL(u);
   }, [blob]);
 
+  // blob 이 바뀔 때(첫 로드/회전) 테두리 자동 검출
+  useEffect(() => {
+    let alive = true;
+    touched.current = false;
+    setDetecting(true);
+    setNote(null);
+    detectCardQuad(blob)
+      .then((q) => {
+        if (!alive || touched.current) return;
+        if (q) {
+          setPts(q);
+          setNote('detected');
+        } else {
+          setPts(cloneQuad(DEFAULT));
+          setNote('manual');
+        }
+      })
+      .finally(() => alive && setDetecting(false));
+    return () => {
+      alive = false;
+    };
+  }, [blob]);
+
   const onPointerDown = useCallback(
     (i: CornerIdx) => (e: React.PointerEvent) => {
       e.preventDefault();
       e.stopPropagation();
       (e.target as HTMLElement).setPointerCapture(e.pointerId);
+      touched.current = true;
+      setNote(null);
       drag.current = { i, sx: e.clientX, sy: e.clientY, start: { ...pts[i] } };
     },
     [pts],
@@ -47,12 +75,10 @@ export default function CropStep({ file, onConfirm, onCancel }: Props) {
     const d = drag.current;
     const box = boxRef.current;
     if (!d || !box) return;
-    const bw = box.clientWidth || 1;
-    const bh = box.clientHeight || 1;
-    const nx = clamp01(d.start.x + (e.clientX - d.sx) / bw);
-    const ny = clamp01(d.start.y + (e.clientY - d.sy) / bh);
+    const nx = clamp01(d.start.x + (e.clientX - d.sx) / (box.clientWidth || 1));
+    const ny = clamp01(d.start.y + (e.clientY - d.sy) / (box.clientHeight || 1));
     setPts((prev) => {
-      const next = prev.map((p) => ({ ...p })) as QuadNorm;
+      const next = cloneQuad(prev);
       next[d.i] = { x: nx, y: ny };
       return next;
     });
@@ -66,11 +92,24 @@ export default function CropStep({ file, onConfirm, onCancel }: Props) {
     if (busy) return;
     setBusy(true);
     try {
-      setBlob(await rotateBlob(blob, 90));
-      setPts(DEFAULT.map((p) => ({ ...p })) as QuadNorm);
+      setBlob(await rotateBlob(blob, 90)); // → blob effect 가 재검출
     } finally {
       setBusy(false);
     }
+  }
+
+  async function handleAutoDetect() {
+    setDetecting(true);
+    setNote(null);
+    const q = await detectCardQuad(blob);
+    touched.current = false;
+    if (q) {
+      setPts(q);
+      setNote('detected');
+    } else {
+      setNote('manual');
+    }
+    setDetecting(false);
   }
 
   const S = 1000;
@@ -90,7 +129,7 @@ export default function CropStep({ file, onConfirm, onCancel }: Props) {
             <img
               src={url}
               alt="크롭할 명함"
-              className="block max-h-[62vh] w-auto object-contain"
+              className="block max-h-[60vh] w-auto object-contain"
               draggable={false}
             />
           )}
@@ -105,7 +144,13 @@ export default function CropStep({ file, onConfirm, onCancel }: Props) {
               fill="rgba(0,0,0,0.55)"
               fillRule="evenodd"
             />
-            <polygon points={poly} fill="none" stroke="#fff" strokeWidth={2} vectorEffect="non-scaling-stroke" />
+            <polygon
+              points={poly}
+              fill="none"
+              stroke="#fff"
+              strokeWidth={2}
+              vectorEffect="non-scaling-stroke"
+            />
           </svg>
 
           {pts.map((p, i) => (
@@ -123,16 +168,28 @@ export default function CropStep({ file, onConfirm, onCancel }: Props) {
 
       <div className="border-t border-slate-200 bg-white px-4 pb-[max(env(safe-area-inset-bottom),0.75rem)] pt-3">
         <p className="mb-2 text-center text-xs text-slate-500">
-          명함의 네 모서리에 점을 맞추세요. 비스듬해도 반듯하게 펴집니다.
+          {detecting
+            ? '명함 테두리 찾는 중…'
+            : note === 'detected'
+              ? '테두리를 자동으로 잡았어요. 어긋난 점은 끌어서 맞추세요.'
+              : '명함의 네 모서리에 점을 맞추세요. 비스듬해도 반듯하게 펴집니다.'}
         </p>
         <div className="flex gap-2">
           <button
             type="button"
             onClick={handleRotate}
-            disabled={busy}
-            className="flex items-center justify-center gap-1.5 rounded-xl border border-slate-300 bg-white px-4 py-3 font-medium text-slate-700 active:bg-slate-100 disabled:opacity-50"
+            disabled={busy || detecting}
+            className="flex items-center justify-center gap-1.5 rounded-xl border border-slate-300 bg-white px-3.5 py-3 font-medium text-slate-700 active:bg-slate-100 disabled:opacity-50"
           >
             <RotateCw size={18} /> 회전
+          </button>
+          <button
+            type="button"
+            onClick={() => void handleAutoDetect()}
+            disabled={busy || detecting}
+            className="flex items-center justify-center gap-1.5 rounded-xl border border-slate-300 bg-white px-3.5 py-3 font-medium text-slate-700 active:bg-slate-100 disabled:opacity-50"
+          >
+            <Wand2 size={18} /> 자동
           </button>
           <button
             type="button"

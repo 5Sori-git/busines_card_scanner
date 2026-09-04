@@ -1,10 +1,15 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useLocation, useNavigate, useParams } from 'react-router-dom';
-import { Check, CornerDownRight } from 'lucide-react';
+import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
+import { Check, CornerDownRight, RefreshCw } from 'lucide-react';
 import { db, saveContact, getImageUrl } from '../db';
 import { emptyContact, type Contact, type PhoneType } from '../types';
 import { newId } from '../lib/id';
 import { formatPhone, normalizePhone } from '../lib/phone';
+import { parseCard } from '../lib/parseCard';
+import { recognizeImage } from '../lib/recognize';
+import { getOcrModel, type OcrProgress } from '../lib/ocr';
+import { getEngine } from '../lib/cloudOcr';
+import type { PrepMode } from '../lib/imagePrep';
 import AppHeader from '../components/AppHeader';
 import ContactForm from '../components/ContactForm';
 import ImageZoom from '../components/ImageZoom';
@@ -101,6 +106,59 @@ export default function EditPage({ mode }: Props) {
     typeof initial.ocrConfidence === 'number' && initial.ocrConfidence < 0.75,
   );
   const [imgUrl, setImgUrl] = useState<string | null>(null);
+
+  // 재인식
+  const [reOpen, setReOpen] = useState(false);
+  const [reMode, setReMode] = useState<PrepMode>('auto');
+  const [reBusy, setReBusy] = useState(false);
+  const [reProg, setReProg] = useState<OcrProgress | null>(null);
+  const engine = getEngine();
+  const engineLabel =
+    engine === 'vision'
+      ? 'Google Cloud Vision'
+      : getOcrModel() === 'best'
+        ? '기기 · 고정밀'
+        : '기기 · 빠름';
+
+  async function reRecognize() {
+    if (!contact.imageId || reBusy) return;
+    setReBusy(true);
+    setReProg({ phase: 'engine', progress: 0.1, label: '이미지 준비 중' });
+    try {
+      const img = await db.images.get(contact.imageId);
+      if (!img) throw new Error('저장된 이미지를 찾을 수 없습니다.');
+      const { result } = await recognizeImage(img.blob, { mode: reMode, onProgress: setReProg });
+      const { fields } = parseCard(result.text, { lines: result.lines });
+      const ok = window.confirm(
+        '새 인식 결과로 각 칸을 다시 채울까요?\n겹치는 칸은 새 값으로 바뀌고, 비어 있으면 지금 값이 유지됩니다.',
+      );
+      setContact((c) => {
+        const next: Contact = {
+          ...c,
+          ocrRawText: result.text,
+          ocrConfidence: result.confidence,
+        };
+        if (ok) {
+          if (fields.name) next.name = fields.name;
+          if (fields.nameEn) next.nameEn = fields.nameEn;
+          if (fields.company) next.company = fields.company;
+          if (fields.department) next.department = fields.department;
+          if (fields.title) next.title = fields.title;
+          if (fields.phones?.length) next.phones = fields.phones;
+          if (fields.emails?.length) next.emails = fields.emails;
+          if (fields.urls?.length) next.urls = fields.urls;
+          if (fields.addresses?.length) next.addresses = fields.addresses;
+        }
+        return toFormView(next);
+      });
+      setShowRaw(true);
+    } catch (e) {
+      alert(e instanceof Error ? e.message : '재인식에 실패했습니다.');
+    } finally {
+      setReBusy(false);
+      setReProg(null);
+    }
+  }
 
   useEffect(() => {
     if (mode !== 'edit' || !id) return;
@@ -239,6 +297,65 @@ export default function EditPage({ mode }: Props) {
             alt="스캔한 명함"
             className="mb-3 max-h-56 w-full rounded-xl border border-slate-200 object-contain"
           />
+        )}
+
+        {contact.imageId && (
+          <div className="mb-3 overflow-hidden rounded-xl border border-slate-200 bg-white">
+            <button
+              type="button"
+              onClick={() => setReOpen((v) => !v)}
+              className="flex w-full items-center gap-2 px-4 py-3 text-sm font-medium text-slate-600"
+            >
+              <RefreshCw size={15} /> 이 사진으로 다시 인식
+              <span className="ml-auto">{reOpen ? '▲' : '▼'}</span>
+            </button>
+            {reOpen && (
+              <div className="space-y-3 border-t border-slate-100 px-4 py-3">
+                <p className="text-xs text-slate-500">
+                  현재 엔진: <span className="font-medium text-slate-700">{engineLabel}</span>{' '}
+                  <Link to="/settings" className="text-brand">
+                    변경
+                  </Link>
+                </p>
+                {engine !== 'vision' && (
+                  <div>
+                    <p className="mb-1 text-xs font-medium text-slate-500">전처리</p>
+                    <div className="flex gap-1.5">
+                      {(
+                        [
+                          ['auto', '자동'],
+                          ['binarize', '고대비'],
+                          ['plain', '원본'],
+                        ] as [PrepMode, string][]
+                      ).map(([v, label]) => (
+                        <button
+                          key={v}
+                          type="button"
+                          onClick={() => setReMode(v)}
+                          className={`rounded-lg border px-3 py-1.5 text-sm ${
+                            reMode === v
+                              ? 'border-brand bg-brand-50 text-brand-700'
+                              : 'border-slate-300 text-slate-600'
+                          }`}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                <button
+                  type="button"
+                  onClick={() => void reRecognize()}
+                  disabled={reBusy}
+                  className="flex w-full items-center justify-center gap-2 rounded-xl bg-brand py-2.5 text-sm font-semibold text-white active:bg-brand-700 disabled:opacity-50"
+                >
+                  <RefreshCw size={15} className={reBusy ? 'animate-spin' : ''} />
+                  {reBusy ? (reProg?.label ?? '인식 중…') : '다시 인식'}
+                </button>
+              </div>
+            )}
+          </div>
         )}
 
         {typeof contact.ocrConfidence === 'number' && (
