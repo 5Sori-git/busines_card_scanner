@@ -1,0 +1,39 @@
+{
+  "name": "myeongham-scanner",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "웹 기반 명함 스캔 → 연락처 정리 PWA (완전 클라이언트 사이드, Tesseract.js OCR)",
+  "scripts": {
+    "postinstall": "node scripts/setup-ocr.mjs",
+    "predev": "node scripts/gen-icons.mjs && node scripts/setup-ocr.mjs",
+    "dev": "vite",
+    "prebuild": "node scripts/gen-icons.mjs && node scripts/setup-ocr.mjs",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "icons": "node scripts/gen-icons.mjs",
+    "setup:ocr": "node scripts/setup-ocr.mjs",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "dexie": "^4.0.10",
+    "dexie-react-hooks": "^1.1.7",
+    "lucide-react": "^0.462.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^6.28.0",
+    "tesseract.js": "^5.1.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "autoprefixer": "^10.4.20",
+    "postcss": "^8.4.49",
+    "tailwindcss": "^3.4.15",
+    "typescript": "^5.6.3",
+    "vite": "^6.0.3",
+    "vite-plugin-pwa": "^0.21.1"
+  }
+}

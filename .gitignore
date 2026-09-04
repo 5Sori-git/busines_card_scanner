@@ -1,0 +1,21 @@
+node_modules
+dist
+dist-ssr
+*.local
+.DS_Store
+.vite
+
+# 자동 생성 아이콘 (scripts/gen-icons.mjs 로 빌드 시 재생성)
+public/pwa-192x192.png
+public/pwa-512x512.png
+public/maskable-512x512.png
+public/apple-touch-icon-180x180.png
+
+# Tesseract 자산 (scripts/setup-ocr.mjs 로 복사/다운로드)
+public/tesseract/
+
+# 로그
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
