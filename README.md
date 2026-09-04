@@ -91,11 +91,15 @@ src/
     ContactForm.tsx    필드 폼 (자동추출 "자동" 배지)
     CropStep.tsx       스캔 전 명함 영역 크롭 + 90° 회전
     ImageZoom.tsx      탭하면 전체화면 확대(핀치줌)
+  lib/
+    ocr.ts             Tesseract 워커(기기 인식) + fast/best 모델 전환
+    cloudOcr.ts        Google Cloud Vision(BYOK) + 엔진(device/vision) 선택
   pages/
-    ListPage.tsx       목록·검색·내보내기 메뉴
-    ScanPage.tsx       카메라/앨범 → 크롭 → 전처리 → OCR(+줄 bbox) → parseCard → 편집화면
+    ListPage.tsx       목록·검색·내보내기·설정 메뉴
+    ScanPage.tsx       카메라/앨범 → 크롭 → 전처리 → (기기 또는 Vision) 인식 → parseCard → 편집
     EditPage.tsx       신규/편집 폼. 전화번호 표시형식 편집, OCR 원문 줄→칸 배정, 자동추출 배지
     DetailPage.tsx     상세·전화/메일 링크·vCard·삭제
+    SettingsPage.tsx   인식 엔진(기기/Vision) · 기기 모델(fast/best) · Vision API 키 관리
 ```
 
 전처리(`imagePrep`) 모드: `plain`(그레이스케일만) / `binarize`(로컬 적응형 이진화) / `auto`(binarize 후 실패 시 대비스트레치 폴백, 기본값).
@@ -109,8 +113,20 @@ src/
 | **M2** | `parseCard` 정교화(부서/직함 분리, 줄 크기 힌트 이름추출, 회사 유추) + 검토·편집 화면(자동추출 배지, 전화 표시형식, OCR 원문 줄→칸 배정, 이미지 확대) | ✅ 완료 |
 | **M3** | 수동 크롭·회전(`CropStep`), 로컬 적응형 이진화(`imagePrep`), EXIF 방향 보정, 파서 개선(이름+직함 분리·근접 유선번호→팩스·로고 회사명) | ✅ 완료 |
 | **M3.5** | 4점 원근 크롭(비스듬한 명함을 반듯하게 펴기), 고정밀(best) 한글 모델 토글 | ✅ 완료 |
-| M4 | HEIC 자동 변환, 재인식(전처리 프리셋), 중복 병합, PNG 아이콘 정식화, (선택) CLOVA 폴백 | ⬜ |
+| **M4** | 선택적 Google Cloud Vision 인식(BYOK: 사용자 API 키 직접 입력), 설정 화면 | ✅ 완료 |
+| M5 | HEIC 자동 변환, 재인식(전처리 프리셋), 중복 병합, PNG 아이콘 정식화 | ⬜ |
 | M4 | OpenCV.js 이진화, 중복 감지·병합, 태그 필터 | ⬜ |
+
+## Google Cloud Vision (선택 · BYOK)
+
+설정 → 인식 엔진 → "Google Cloud Vision" 선택 후 **본인 API 키 입력**. 키는 이 기기
+`localStorage`(`cardscan.gcvKey`)에만 저장되고, 요청은 브라우저 → `vision.googleapis.com` 직접 전송.
+
+- 무료 월 1,000건 (이후 1,000건당 약 $1.5). `DOCUMENT_TEXT_DETECTION`, 1건 = 1 unit.
+- 키 발급: Cloud Console에서 프로젝트 생성 → Cloud Vision API 사용 설정 → 사용자 인증 정보 → API 키.
+- **키는 개발자도구에 노출**되므로, 그 키에 애플리케이션 제한(HTTP 리퍼러 = 배포 주소) + API 제한(Cloud Vision API)을 반드시 거세요.
+- 이 엔진을 쓰면 **스캔 이미지가 Google 서버로 전송**됩니다(기본 기기 인식은 전송 없음). 스캔 화면에 안내 표시.
+- 엄격한 CSP를 쓰는 호스팅이면 `connect-src https://vision.googleapis.com` 허용 필요. (GitHub Pages는 CSP 없음 → 그대로 동작)
 
 ## 알아둘 점
 

@@ -8,6 +8,7 @@ import ListPage from './pages/ListPage';
 import ScanPage from './pages/ScanPage';
 import EditPage from './pages/EditPage';
 import DetailPage from './pages/DetailPage';
+import SettingsPage from './pages/SettingsPage';
 import ErrorPage from './pages/ErrorPage';
 
 // 정적 호스팅 + 오프라인 안정성을 위해 HashRouter 사용 (딥링크 새로고침에도 서버 rewrite 불필요).
@@ -22,6 +23,7 @@ const router = createHashRouter([
       { path: 'new', element: <EditPage mode="new" /> },
       { path: 'contact/:id', element: <DetailPage /> },
       { path: 'contact/:id/edit', element: <EditPage mode="edit" /> },
+      { path: 'settings', element: <SettingsPage /> },
     ],
   },
 ]);

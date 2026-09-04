@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { Camera, Download, MoreVertical, Search, Upload, X } from 'lucide-react';
+import { Camera, Download, MoreVertical, Search, Settings, Upload, X } from 'lucide-react';
 import { db, pruneOrphanImages } from '../db';
 import type { Contact } from '../types';
 import { formatPhone } from '../lib/phone';
@@ -180,6 +180,14 @@ export default function ListPage() {
             onClick={() => {
               setMenuOpen(false);
               fileRef.current?.click();
+            }}
+          />
+          <SheetItem
+            icon={<Settings size={18} />}
+            label="설정 (인식 엔진·API 키)"
+            onClick={() => {
+              setMenuOpen(false);
+              navigate('/settings');
             }}
           />
         </Sheet>
