@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { RotateCw, Scan, Maximize, Wand2 } from 'lucide-react';
-import { rotateBlob, detectCardQuad, type QuadNorm, type Pt } from '../lib/imagePrep';
+import { rotateBlob, type QuadNorm, type Pt } from '../lib/imagePrep';
+import { detectCardQuad } from '../lib/cardDetect';
 
 interface Props {
   file: Blob;

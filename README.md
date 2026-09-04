@@ -104,8 +104,11 @@ src/
     SettingsPage.tsx   인식 엔진(기기/Vision) · 기기 모델(fast/best) · Vision API 키 관리
 ```
 
-**테두리 자동 검출**: 축소→Otsu 이진화→최대 연결영역의 극점 4개를 모서리로 (밝은/어두운 극성 둘 다 시도).
-어두운 장식 띠가 있는 명함은 그 부분이 빠질 수 있어 사용자가 모서리를 미세조정 (CropStep의 "자동" 버튼으로 재시도).
+**테두리 자동 검출** (`cardDetect.ts` + `cardDetect.worker.ts`, 워커에서 실행 → 메인 스레드 안 막음):
+각 변을 바깥→안으로 스캔해 국소 밝기 전이(엣지) 점집합 → RANSAC 직선피팅 → 네 직선 교점 = 네 모서리.
+국소 그래디언트 기반이라 조명·질감에 강함. 결과가 "명함답지" 않으면(`isPlausibleCardQuad`: 볼록성·넓이·가로세로비·원근 검증) 자동 적용 안 하고 기본 사각형 유지. 폴백은 밝기 blob 방식(`imagePrep.detectQuadByBlob`).
+배경이 카드 경계까지 복잡하거나 카드가 화면을 꽉 채우면 검출 실패 → 수동 4점 드래그.
+(OpenCV.js는 10MB + 메인 스레드 WASM 지연 + Vite 워커에서 importScripts 불가 문제로 채택하지 않음)
 
 전처리(`imagePrep`) 모드: `plain`(그레이스케일만) / `binarize`(로컬 적응형 이진화) / `auto`(binarize 후 실패 시 대비스트레치 폴백, 기본값).
 
